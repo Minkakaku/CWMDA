@@ -55,21 +55,38 @@ write.csv(
 )
 saveRDS(markers_all, RDS_MARKERS)
 
-pdac_markers_broad <- list(
-  Epithelial = c("Krt18", "Sox9", "Krt8"),
-  Fibroblast = c("Col1a1", "Pdgfra", "Col3a1", "Dcn"),
-  Myeloid = c("Ms4a7", "Cd68", "Lyz2"),
-  Lymphocyte = c("Ptprc", "Cd3d", "Cd79a", "Nkg7"),
-  Endothelial = c("Pecam1", "Cdh5", "Kdr")
+human_lung_markers_broad_core <- list(
+  Epithelial   = c("EPCAM", "KRT18", "KRT19"),
+  Endothelial  = c("PECAM1", "CLDN5", "FLT1"),
+  Fibroblast   = c("COL1A1", "DCN", "PDGFRA"),
+  Myeloid      = c("TYROBP", "AIF1", "LST1"),
+  Macrophage   = c("CD68", "C1QA", "APOE"),
+  Monocyte     = c("FCN1", "CCR2", "CTSS"),
+  Neutrophil   = c("S100A8", "S100A9", "CSF3R"),
+  Dendritic    = c("FCER1A", "ITGAX", "HLA-DRA"),
+  T_cell       = c("CD3D", "CD3E", "TRAC"),
+  NK           = c("NKG7", "KLRD1", "GNLY"),
+  B_cell       = c("CD79A", "MS4A1", "CD74"),
+  Plasma       = c("JCHAIN", "MZB1", "SDC1"),
+  Mast         = c("MS4A2", "KIT", "CPA3"),
+  Pericyte     = c("RGS5", "PDGFRB", "CSPG4"),
+  SMC          = c("ACTA2", "TAGLN", "MYH11")
 )
 
-p_markers <- Seurat::DotPlot(sc, features = pdac_markers_broad) +
-  Seurat::RotatedAxis()
-save_plot(
-  p_markers,
-  file.path(MARKER_DIR, "cell_markers"),
-  width = 10,
-  height = 6
+human_lung_markers_broad_core <- lapply(
+  human_lung_markers_broad_core,
+  function(x) x[x %in% rownames(sc)]
 )
+human_lung_markers_broad_core <- human_lung_markers_broad_core[
+  lengths(human_lung_markers_broad_core) > 0
+]
+
+p_markers <- Seurat::DotPlot(
+  sc,
+  features = human_lung_markers_broad_core,
+  assay = "SCT"
+) + Seurat::RotatedAxis()
+
+save_plot( p_markers, file.path(MARKER_DIR, "cell_markers"), width = 15, height = 6 )
 
 message("FindAllMarkers 完成。请先查看 ", file.path(MARKER_DIR, "AllClusters_markers.csv"))

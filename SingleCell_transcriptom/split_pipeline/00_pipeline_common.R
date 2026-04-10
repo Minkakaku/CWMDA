@@ -321,8 +321,11 @@ save_step_rds <- function(obj, path) {
 assign_group_metadata <- function(obj) {
   obj$samples <- obj$orig.ident
   obj$group <- dplyr::case_when(
-    grepl("^Con", obj$orig.ident) ~ "CON",
-    grepl("^Exp", obj$orig.ident) ~ "Exp",
+    obj$orig.ident %in% c("MIA_LYH_N", "MIA_FXX_N", "MIA_HLQ_N") ~ "Normal",
+    obj$orig.ident %in% c("MIA_HXL_T", "MIA_LYP_T", "MIA_HLQ_T") ~ "Microinvasive",
+    obj$orig.ident %in% c("MIA_HXL_P", "MIA_LYP_P", "MIA_HLQ_P") ~ "Microinvasive_Para",
+    obj$orig.ident %in% c("MIA_ZGM_T", "MIA_FXX_T", "MIA_LYH_T") ~ "Invasive",
+    obj$orig.ident %in% c("MIA_ZGM_P", "MIA_FXX_P", "MIA_LYH_P") ~ "Invasive_Para",
     TRUE ~ NA_character_
   )
 

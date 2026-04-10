@@ -37,24 +37,31 @@ if (!file.exists(RDS_MARKERS)) {
 
 # 手工注释在这里改最方便，后续如果 cluster 编号变化，只需要更新这个向量。
 cluster_to_celltype <- c(
-  "0" = "CAF",
-  "1" = "Macrophage",
-  "2" = "CAF",
-  "3" = "Epithelial",
-  "4" = "pEpithelial",
-  "5" = "T",
-  "6" = "ISG+ Epithelial",
-  "7" = "Macrophage",
-  "8" = "VSMCs",
-  "9" = "Neutrophil",
-  "10" = "T",
-  "11" = "DC",
-  "12" = "B",
-  "13" = "Plasma",
-  "14" = "Mesothelial",
-  "15" = "iNeutrophil",
-  "16" = "pEpithelial",
-  "17" = "Endothelial"
+  "0" = "CD4 T",
+  "1" = "Extra_alveolar capillary EC",
+  "2" = "NK",
+  "3" = "COL14A1 matrix FB",
+  "4" = "CD8 T",
+  "5" = "Neutrophil",
+  "6" = "Alveolar capillary EC",
+  "7" = "Club Epi",
+  "8" = "Resident Macrophage",
+  "9" = "Monocyte",
+  "10" = "MAST",
+  "11" = "Alveolar Macrophage",
+  "12" = "Extra_alveolar capillary EC",
+  "13" = "Basal Epi",
+  "14" = "PTGDS matrix FB",
+  "15" = "AT1 Epi",
+  "16" = "SMC",
+  "17" = "Venous EC",
+  "18" = "Pericyte",
+  "19" = "B",
+  "20" = "Artery EC",
+  "21" = "Plasma",
+  "22" = "Lymphatic endothelial",
+  "23" = "Ciliated",
+  "24" = "pDC"
 )
 
 sc$cell_type <- unname(cluster_to_celltype[as.character(sc$seurat_clusters)])
@@ -81,7 +88,8 @@ p_umap_celltype <- Seurat::DimPlot(
   label = TRUE,
   repel = TRUE
 )
-save_plot(p_umap_celltype, file.path(ANNOTATION_DIR, "UMAP_by_celltype"))
+save_plot(p_umap_celltype, file.path(ANNOTATION_DIR, "UMAP_by_celltype"),  width = 13,
+  height = 8)
 
 p_umap_by_sample <- Seurat::DimPlot(
   sc,
@@ -92,8 +100,8 @@ p_umap_by_sample <- Seurat::DimPlot(
 save_plot(
   p_umap_by_sample,
   file.path(ANNOTATION_DIR, "UMAP_split_by_sample"),
-  width = 15,
-  height = 8
+  width = 12,
+  height = 10
 )
 
 p_umap_by_group <- Seurat::DimPlot(
@@ -105,7 +113,7 @@ p_umap_by_group <- Seurat::DimPlot(
 save_plot(
   p_umap_by_group,
   file.path(ANNOTATION_DIR, "UMAP_split_by_group"),
-  width = 15,
+  width = 12,
   height = 6
 )
 

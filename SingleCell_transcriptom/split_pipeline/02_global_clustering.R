@@ -11,7 +11,7 @@ get_current_script_dir <- function() {
       mustWork = FALSE
     )))
   }
-  
+
   if (!is.null(sys.frames()[[1]]$ofile)) {
     return(dirname(normalizePath(
       sys.frames()[[1]]$ofile,

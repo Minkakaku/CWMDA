@@ -1,0 +1,6 @@
+python3 /home/hf/DataFile/split_pipeline/infercnv.py \
+  --input /home/hf/DataFile/04_rds/05.sc_final.rds \
+  --species human \
+  --group-column cell_type \
+  --reference-types "CD8 T,B,CD4 T,Resident Macrophage,Monocyte" \
+  --output-dir /home/hf/DataFile/infercnv_out
