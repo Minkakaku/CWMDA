@@ -1,0 +1,4 @@
+cohort_id,candidate_columns
+TCGA_COAD,paper_CMS;paper_CRIS;paper_mRNA_subtype;Subtype_Selected;Subtype;subtype
+TCGA_CRC,paper_CMS;paper_CRIS;paper_mRNA_subtype;Subtype_Selected;Subtype;subtype
+TCGA_PRAD,paper_mRNA_subtype;paper_iCluster;iCluster;Subtype_Selected;Subtype;subtype

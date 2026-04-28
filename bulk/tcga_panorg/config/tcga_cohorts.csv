@@ -1,0 +1,4 @@
+cohort_id,disease,projects,clinical_features,molecular_group_preference,notes
+TCGA_COAD,COLON,TCGA-COAD,"age;stage;T_stage;N_stage;M_stage;tumor_grade","exact5_first","Colon cancer only."
+TCGA_CRC,CRC,TCGA-COAD;TCGA-READ,"age;stage;T_stage;N_stage;M_stage;tumor_grade","exact5_first","Colorectal cancer by merging COAD and READ."
+TCGA_PRAD,PRAD,TCGA-PRAD,"age;stage;T_stage;N_stage;gleason_score","exact5_first","Prostate cancer."

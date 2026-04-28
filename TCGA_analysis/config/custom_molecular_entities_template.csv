@@ -1,0 +1,3 @@
+disease,patient_id,molecular_entity
+CRC,TCGA-XX-XXXX,CMS1
+PRAD,TCGA-YY-YYYY,ERG_fusion
