@@ -4,7 +4,7 @@
 
 ## 目录
 
-- `00_config.R`：所有可调参数，包括 QC 阈值、Harmony/CCA、marker 阈值、注释、污染 cluster 去除和比例图设置。
+- `00_config.R`：流程参数，包括 Harmony/CCA、marker 阈值、注释、污染 cluster 去除和比例图设置。
 - `00_functions.R`：所有包装函数和步骤函数。
 - `main/`：主群分析步骤。
 - `subcluster/`：亚群分析步骤。
@@ -14,12 +14,21 @@
 
 ## 主群流程
 
-推荐先跑 QC1，检查图后修改 `00_config.R`，再继续过滤和后续分析：
+推荐先跑 QC1，检查图并编辑样本级 QC 阈值表，再继续过滤和后续分析：
 
 ```bash
 bash "single cell/R single cell/run_main.sh" qc1
+# 编辑项目工作目录下 01_QC/sample_qc_thresholds.csv 里的阈值列
+bash "single cell/R single cell/run_main.sh" qc2
+# 编辑项目工作目录下 01_QC/sample_groups.csv 里的 group 列
 bash "single cell/R single cell/run_main.sh" after_qc
 ```
+
+`qc1` 会在 `01_QC/sample_qc_thresholds.csv` 生成每个样本一行的 QC 阈值表。
+阈值列包括 `nFeature_RNA_min/nFeature_RNA_max/percent_mt_max/percent_hb_max/nCount_RNA_max/log10GenesPerUMI_min/keep_singlet_only/contamination_max`，`qc2` 会按样本读取这些阈值进行过滤。
+
+`qc2` 会在 `01_QC/sample_groups.csv` 生成样本分组表，包含 `sample/group/sample_dir/outs_dir/matrix_dir/matrix_type`。
+后续 `cluster`、注释和比例分析会读取这个 CSV 的 `group` 列。第一次直接运行 `all` 或 `after_qc` 时，流程会在生成该 CSV 后停止，编辑 `group` 列后再次运行即可继续。
 
 也可以按单步运行：
 

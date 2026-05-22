@@ -6,17 +6,22 @@ if (!exists("script_dir")) {
   script_dir <- dirname(normalizePath(sys.frame(1)$ofile %||% ".", mustWork = FALSE))
 }
 
-# Expected layout:
-# workingd/
-#   data2analysis/
-#   pipeline/
-PROJECT_DIR <- normalizePath(file.path(script_dir, ".."), winslash = "/", mustWork = FALSE)
-setwd(PROJECT_DIR)
-
 env <- function(name, default) {
   value <- Sys.getenv(name, unset = "")
   if (nzchar(value)) value else default
 }
+
+# Default project layout differs by platform:
+# - Linux: pipeline scripts live inside the project working directory.
+# - Windows: data2analysis is resolved relative to the current working directory.
+SCRIPT_DIR <- normalizePath(script_dir, winslash = "/", mustWork = FALSE)
+DEFAULT_PROJECT_DIR <- if (identical(.Platform$OS.type, "windows")) {
+  getwd()
+} else {
+  file.path(SCRIPT_DIR, "..")
+}
+PROJECT_DIR <- normalizePath(env("PROJECT_DIR", DEFAULT_PROJECT_DIR), winslash = "/", mustWork = FALSE)
+setwd(PROJECT_DIR)
 
 env_num <- function(name, default) {
   value <- env(name, "")
@@ -111,6 +116,8 @@ MARKER_DIR <- "03_FindMarkers"
 ANNOTATION_DIR <- "04_CellAnnotation"
 PROPORTION_DIR <- "05_CellProportion"
 QS2_DIR <- "04_qs2"
+SAMPLE_SHEET_PATH <- env("SAMPLE_SHEET", file.path(QC_DIR, "sample_groups.csv"))
+QC_FILTER_SHEET_PATH <- env("QC_FILTER_SHEET", file.path(QC_DIR, "sample_qc_thresholds.csv"))
 
 QS2_PRE_QC <- env("QS2_PRE_QC", file.path(QS2_DIR, "00.sc_before_QC_merged.qs2"))
 QS2_QC <- env("QS2_QC", file.path(QS2_DIR, "01.sc_after_QC_merged.qs2"))
@@ -128,19 +135,12 @@ QC_READ <- list(
   run_doublet = TRUE,
   run_decontx = FALSE
 )
-
-QC_FILTER <- list(
-  nFeature_RNA_min = 300,
-  nFeature_RNA_max = 6000,
-  percent_mt_max = 10,
-  percent_hb_max = 1,
-  nCount_RNA_max = 30000,
-  log10GenesPerUMI_min = 0.8,
-  keep_singlet_only = TRUE,
-  contamination_max = 0.2
-)
-
-PIPELINE_NORMALIZATION <- normalization_method(env("PIPELINE_NORMALIZATION", "NormalizeData"))
+options(future.globals.maxSize = 24 * 1024^3)  # 4 GiB
+# NormalizeData
+PIPELINE_NORMALIZATION <- normalization_method(env(
+  "PIPELINE_NORMALIZATION",
+  "SCT"
+))
 PIPELINE_ASSAY <- if (identical(PIPELINE_NORMALIZATION, "SCT")) "SCT" else "RNA"
 
 NORMALIZE <- list(
@@ -158,31 +158,12 @@ NORMALIZE <- list(
 )
 
 CLUSTER <- list(
-  npcs = env_int("PIPELINE_NPCS", 27L),
-  dims = seq_len(env_int("PIPELINE_NDIMS", 27L)),
-  resolution = env_num("PIPELINE_RESOLUTION", 0.4),
+  npcs = env_int("PIPELINE_NPCS", 50L),
+  dims = seq_len(env_int("PIPELINE_NDIMS", 35L)),
+  resolution = env_num("PIPELINE_RESOLUTION", 0.6),
   batch_method = batch_correction_method(env("PIPELINE_BATCH_METHOD", "harmony")),
   batch_group = env("PIPELINE_BATCH_GROUP", env("PIPELINE_HARMONY_GROUP", "orig.ident")),
   cca_reduction = env("PIPELINE_CCA_REDUCTION", "integrated.cca")
-)
-
-GROUP_BY_SAMPLE <- c(
-  PBS1 = "PBS",
-  PBS2 = "PBS",
-  PBS3 = "PBS",
-  PBS4 = "PBS",
-  TPF1 = "TPF",
-  TPF2 = "TPF",
-  TPF3 = "TPF",
-  TPF4 = "TPF",
-  BiTEs1 = "BiTEs@TPF",
-  BiTEs2 = "BiTEs@TPF",
-  BiTEs3 = "BiTEs@TPF",
-  BiTEs4 = "BiTEs@TPF",
-  aCD201 = "aCD20@TPF",
-  aCD202 = "aCD20@TPF",
-  aCD203 = "aCD20@TPF",
-  aCD204 = "aCD20@TPF"
 )
 
 GROUP_LEVELS <- c(
@@ -190,36 +171,6 @@ GROUP_LEVELS <- c(
   "TPF",
   "BiTEs@TPF",
   "aCD20@TPF"
-)
-
-SAMPLE_LEVELS <- names(GROUP_BY_SAMPLE)
-
-CLUSTER_TO_CELLTYPE <- c(
-  "0" = "B cells",
-  "1" = "Naive CD4 T cells",
-  "2" = "Klrd1+ cytotoxic CD8 T cells",
-  "3" = "B cells",
-  "4" = "Eomes+ cytotoxic CD8 T cells",
-  "5" = "Tfh CD4 T cells",
-  "6" = "Naive B cells",
-  "7" = "Treg",
-  "8" = "mature DCs",
-  "9" = "Macrophages",
-  "10" = "ISGhi B cells",
-  "11" = "GC B cells",
-  "12" = "Themis+ naive T cells",
-  "13" = "NK cells",
-  "14" = "Cycling B cells",
-  "15" = "Inflammatory monocytes",
-  "16" = "Blood Endothelial Cells",
-  "17" = "Fibroblastic Reticular Cells",
-  "18" = "mature DCs",
-  "19" = "pDCs",
-  "20" = "Cycling Treg",
-  "21" = "Th17 cells",
-  "22" = "B cells",
-  "23" = "Naive CD4 T cells",
-  "24" = "Plasma cells"
 )
 
 MARKER_PARAMS <- list(
@@ -294,6 +245,7 @@ SUBCLUSTER <- list(
     NORMALIZE$sct_return_only_var_genes
   ),
   sct_conserve_memory = env_bool("SUBCLUSTER_SCT_CONSERVE_MEMORY", NORMALIZE$sct_conserve_memory),
+  verbose = TRUE,
   npcs = env_int("SUBCLUSTER_NPCS", 15L),
   dims = seq_len(env_int("SUBCLUSTER_NDIMS", 15L)),
   resolution = env_num("SUBCLUSTER_RESOLUTION", 0.2),
@@ -306,14 +258,6 @@ SUBCLUSTER <- list(
   rerun_resolution = env_num("SUBCLUSTER_RERUN_RESOLUTION", env_num("SUBCLUSTER_RESOLUTION", 0.2)),
   rerun_dims = seq_len(env_int("SUBCLUSTER_RERUN_NDIMS", env_int("SUBCLUSTER_NDIMS", 15L))),
   cluster_backup_col = env("SUBCLUSTER_CLUSTER_BACKUP_COL", "subcluster_before_annotation_cleanup"),
-  # Fill after checking 07 markers, for example: c("0" = "AT2", "1" = "AT1")
-  annotation = c(
-    "0" = "Treg1",
-    "1" = "Treg2",
-    "2" = "Treg3",
-    "3" = "Treg4",
-    "4" = "Cycling Treg"
-  ),
   marker_params = list(
     only_pos = env_bool("SUBCLUSTER_MARKER_ONLY_POS", TRUE),
     test_use = env("SUBCLUSTER_MARKER_TEST_USE", "wilcox"),

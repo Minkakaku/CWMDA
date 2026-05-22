@@ -207,132 +207,418 @@ save_qc_plots <- function(obj, stage) {
   }
 }
 
-apply_qc_filter <- function(sc) {
-  keep <- sc$nFeature_RNA > QC_FILTER$nFeature_RNA_min &
-    sc$nFeature_RNA < QC_FILTER$nFeature_RNA_max &
-    sc$percent.mt < QC_FILTER$percent_mt_max &
-    sc$percent.hb < QC_FILTER$percent_hb_max &
-    sc$nCount_RNA < QC_FILTER$nCount_RNA_max &
-    sc$log10GenesPerUMI > QC_FILTER$log10GenesPerUMI_min
+default_qc_filter_thresholds <- function() {
+  list(
+    nFeature_RNA_min = 500,
+    nFeature_RNA_max = 6000,
+    percent_mt_max = 8,
+    percent_hb_max = 1,
+    nCount_RNA_max = 30000,
+    log10GenesPerUMI_min = 0.8,
+    keep_singlet_only = TRUE,
+    contamination_max = 0.2
+  )
+}
 
-  if (QC_FILTER$keep_singlet_only && "doublet_class" %in% colnames(sc@meta.data)) {
-    keep <- keep & sc$doublet_class == "singlet"
+qc_filter_columns <- function() {
+  names(default_qc_filter_thresholds())
+}
+
+metric_quantile <- function(x, prob) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return(NA_real_)
+  unname(stats::quantile(x, probs = prob, na.rm = TRUE, names = FALSE))
+}
+
+sample_qc_summary <- function(sc, samples) {
+  sample_values <- as.character(sc$orig.ident)
+  rows <- lapply(samples, function(sample) {
+    cells <- sample_values == sample
+    data.frame(
+      sample = sample,
+      cells_before_qc = sum(cells),
+      obs_nFeature_RNA_p01 = round(metric_quantile(sc$nFeature_RNA[cells], 0.01), 2),
+      obs_nFeature_RNA_p99 = round(metric_quantile(sc$nFeature_RNA[cells], 0.99), 2),
+      obs_nCount_RNA_p99 = round(metric_quantile(sc$nCount_RNA[cells], 0.99), 2),
+      obs_percent_mt_p95 = round(metric_quantile(sc$percent.mt[cells], 0.95), 2),
+      obs_percent_hb_p95 = round(metric_quantile(sc$percent.hb[cells], 0.95), 2),
+      obs_log10GenesPerUMI_p01 = round(metric_quantile(sc$log10GenesPerUMI[cells], 0.01), 3),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  })
+  Reduce(rbind, rows)
+}
+
+parse_bool_value <- function(x, column_name) {
+  value <- tolower(trimws(as.character(x)))
+  out <- rep(NA, length(value))
+  out[value %in% c("true", "t", "1", "yes", "y")] <- TRUE
+  out[value %in% c("false", "f", "0", "no", "n")] <- FALSE
+  bad <- is.na(out) & !is.na(value) & nzchar(value)
+  if (any(bad)) {
+    stop("Invalid boolean values in ", column_name, ": ", paste(unique(value[bad]), collapse = ", "), call. = FALSE)
+  }
+  out
+}
+
+read_qc_filter_sheet <- function(path = QC_FILTER_SHEET_PATH, required = TRUE) {
+  if (!file.exists(path)) {
+    if (required) {
+      stop("Sample QC threshold CSV not found: ", path, ". Run qc1 first, edit thresholds, then rerun qc2.", call. = FALSE)
+    }
+    return(NULL)
   }
 
-  if (!is.null(QC_FILTER$contamination_max) && "Contamination" %in% colnames(sc@meta.data)) {
-    keep <- keep & !is.na(sc$Contamination) & sc$Contamination < QC_FILTER$contamination_max
+  sheet <- read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+  required_cols <- c("sample", qc_filter_columns())
+  missing_cols <- setdiff(required_cols, colnames(sheet))
+  if (length(missing_cols) > 0) {
+    stop("Sample QC threshold CSV missing columns: ", paste(missing_cols, collapse = ", "), call. = FALSE)
+  }
+
+  sheet$sample <- trimws(as_character_column(sheet, "sample", "Sample QC threshold CSV"))
+  if (any(!has_text(sheet$sample))) {
+    stop("Sample QC threshold CSV contains blank sample names: ", path, call. = FALSE)
+  }
+
+  duplicate_samples <- unique(sheet$sample[duplicated(sheet$sample)])
+  if (length(duplicate_samples) > 0) {
+    stop("Sample QC threshold CSV has duplicated samples: ", paste(duplicate_samples, collapse = ", "), call. = FALSE)
+  }
+
+  numeric_cols <- setdiff(qc_filter_columns(), "keep_singlet_only")
+  for (col in numeric_cols) {
+    sheet[[col]] <- suppressWarnings(as.numeric(sheet[[col]]))
+    if (any(is.na(sheet[[col]]))) {
+      stop("Sample QC threshold CSV has missing or non-numeric values in ", col, ".", call. = FALSE)
+    }
+  }
+  sheet$keep_singlet_only <- parse_bool_value(sheet$keep_singlet_only, "keep_singlet_only")
+  if (any(is.na(sheet$keep_singlet_only))) {
+    stop("Sample QC threshold CSV has missing values in keep_singlet_only.", call. = FALSE)
+  }
+
+  sheet
+}
+
+write_qc_filter_sheet <- function(sc, path = QC_FILTER_SHEET_PATH) {
+  samples <- unique(as.character(sc$orig.ident))
+  thresholds <- default_qc_filter_thresholds()
+  summary_df <- sample_qc_summary(sc, samples)
+  threshold_df <- data.frame(sample = samples, stringsAsFactors = FALSE, check.names = FALSE)
+  for (col in names(thresholds)) {
+    threshold_df[[col]] <- thresholds[[col]]
+  }
+
+  existing <- read_qc_filter_sheet(path, required = FALSE)
+  if (!is.null(existing)) {
+    existing_sample <- existing$sample
+    existing_index <- stats::setNames(seq_len(nrow(existing)), existing_sample)
+    for (col in qc_filter_columns()) {
+      reusable <- samples %in% existing_sample
+      threshold_df[[col]][reusable] <- existing[[col]][unname(existing_index[samples[reusable]])]
+    }
+  }
+
+  out <- merge(summary_df, threshold_df, by = "sample", all.x = TRUE, sort = FALSE)
+  out <- out[match(samples, out$sample), , drop = FALSE]
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  write.csv(out, path, row.names = FALSE, quote = FALSE)
+  log_msg("Sample QC threshold CSV written: ", path, ". Edit threshold columns before running qc2 if needed.")
+  invisible(path)
+}
+
+apply_qc_filter <- function(sc) {
+  thresholds <- read_qc_filter_sheet(required = TRUE)
+  sample_values <- as.character(sc$orig.ident)
+  missing_samples <- setdiff(unique(sample_values), thresholds$sample)
+  if (length(missing_samples) > 0) {
+    stop(
+      "Sample QC threshold CSV is missing samples: ",
+      paste(missing_samples, collapse = ", "),
+      ". Rerun qc1 to refresh ",
+      QC_FILTER_SHEET_PATH,
+      ".",
+      call. = FALSE
+    )
+  }
+
+  keep <- rep(FALSE, ncol(sc))
+  for (i in seq_len(nrow(thresholds))) {
+    th <- thresholds[i, , drop = FALSE]
+    cells <- sample_values == th$sample[[1]]
+    if (!any(cells)) next
+
+    sample_keep <- sc$nFeature_RNA[cells] > th$nFeature_RNA_min &
+      sc$nFeature_RNA[cells] < th$nFeature_RNA_max &
+      sc$percent.mt[cells] < th$percent_mt_max &
+      sc$percent.hb[cells] < th$percent_hb_max &
+      sc$nCount_RNA[cells] < th$nCount_RNA_max &
+      sc$log10GenesPerUMI[cells] > th$log10GenesPerUMI_min
+
+    if (isTRUE(th$keep_singlet_only[[1]]) && "doublet_class" %in% colnames(sc@meta.data)) {
+      sample_keep <- sample_keep & sc$doublet_class[cells] == "singlet"
+    }
+
+    if ("Contamination" %in% colnames(sc@meta.data)) {
+      sample_keep <- sample_keep & !is.na(sc$Contamination[cells]) & sc$Contamination[cells] < th$contamination_max
+    }
+
+    sample_keep[is.na(sample_keep)] <- FALSE
+    keep[cells] <- sample_keep
   }
 
   sc[, keep]
 }
 
-assign_group_metadata <- function(sc) {
-  sc$samples <- as.character(sc$orig.ident)
-  sc$group <- unname(GROUP_BY_SAMPLE[sc$samples])
-  if (anyNA(sc$group)) warning("Some samples are not in GROUP_BY_SAMPLE.")
-  if (exists("SAMPLE_LEVELS")) {
-    sc$samples <- factor(sc$samples, levels = SAMPLE_LEVELS)
+load_sample_discovery_env <- function() {
+  discovery_script <- file.path(script_dir, "tools", "sample_discovery.R")
+  if (!file.exists(discovery_script)) {
+    stop("sample_discovery.R not found: ", discovery_script, call. = FALSE)
   }
-  if (exists("GROUP_LEVELS")) {
-    sc$group <- factor(sc$group, levels = GROUP_LEVELS)
+
+  discovery_env <- new.env(parent = globalenv())
+  sys.source(discovery_script, envir = discovery_env, keep.source = FALSE)
+  discovery_env
+}
+
+has_text <- function(x) {
+  !is.na(x) & nzchar(x)
+}
+
+as_character_column <- function(df, column_name, context_label) {
+  if (!column_name %in% colnames(df)) {
+    stop(context_label, " missing column: ", column_name, call. = FALSE)
+  }
+
+  as.character(unlist(df[[column_name]], use.names = FALSE))
+}
+
+read_sample_sheet <- function(path = SAMPLE_SHEET_PATH, required = FALSE) {
+  if (!file.exists(path)) {
+    if (required) {
+      stop("Sample group CSV not found: ", path, ". Run qc2 first, edit the group column, then rerun cluster.", call. = FALSE)
+    }
+    return(NULL)
+  }
+
+  sheet <- read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+  required_cols <- c("sample", "group")
+  missing_cols <- setdiff(required_cols, colnames(sheet))
+  if (length(missing_cols) > 0) {
+    stop("Sample group CSV missing columns: ", paste(missing_cols, collapse = ", "), call. = FALSE)
+  }
+
+  sheet$sample <- trimws(as_character_column(sheet, "sample", "Sample group CSV"))
+  sheet$group <- trimws(as_character_column(sheet, "group", "Sample group CSV"))
+  if (any(!has_text(sheet$sample))) {
+    stop("Sample group CSV contains blank sample names: ", path, call. = FALSE)
+  }
+
+  duplicate_samples <- unique(sheet$sample[duplicated(sheet$sample)])
+  if (length(duplicate_samples) > 0) {
+    stop("Sample group CSV has duplicated samples: ", paste(duplicate_samples, collapse = ", "), call. = FALSE)
+  }
+
+  sheet
+}
+
+write_sample_group_sheet <- function(sc, path = SAMPLE_SHEET_PATH) {
+  discovery_env <- load_sample_discovery_env()
+  manifest <- discovery_env$discover_samples(DATA_DIR)
+
+  present_samples <- unique(as.character(sc$orig.ident))
+  manifest$sample <- as_character_column(manifest, "sample", "Discovered sample manifest")
+  manifest$group <- as_character_column(manifest, "group", "Discovered sample manifest")
+  manifest_sample <- manifest$sample
+  manifest <- manifest[manifest_sample %in% present_samples, , drop = FALSE]
+  manifest_sample <- manifest$sample
+  missing_samples <- setdiff(present_samples, manifest_sample)
+  if (length(missing_samples) > 0) {
+    fallback_rows <- data.frame(
+      sample = missing_samples,
+      group = missing_samples,
+      sample_dir = file.path(DATA_DIR, missing_samples),
+      outs_dir = file.path(DATA_DIR, missing_samples, "outs"),
+      matrix_dir = file.path(DATA_DIR, missing_samples, "outs", "filtered_feature_bc_matrix"),
+      matrix_type = "mtx_dir",
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    manifest <- rbind(manifest, fallback_rows)
+  }
+
+  manifest_sample <- as_character_column(manifest, "sample", "Discovered sample manifest")
+  manifest <- manifest[unname(stats::setNames(seq_len(nrow(manifest)), manifest_sample)[present_samples]), , drop = FALSE]
+  existing <- read_sample_sheet(path, required = FALSE)
+  if (!is.null(existing)) {
+    manifest_sample <- as_character_column(manifest, "sample", "Discovered sample manifest")
+    existing_groups <- stats::setNames(existing$group, existing$sample)
+    reusable <- manifest_sample %in% names(existing_groups) & has_text(existing_groups[manifest_sample])
+    manifest$group[reusable] <- unname(existing_groups[manifest_sample[reusable]])
+  }
+
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  write.csv(manifest, path, row.names = FALSE, quote = FALSE)
+  log_msg("Sample group CSV written: ", path, ". Edit the group column before running cluster if needed.")
+  invisible(path)
+}
+
+resolve_group_mapping <- function(samples, required_sheet = FALSE) {
+  samples <- as.character(samples)
+  sheet <- read_sample_sheet(required = required_sheet)
+  if (!is.null(sheet)) {
+    if (any(!has_text(sheet$group))) {
+      stop("Sample group CSV has blank group values. Fill the group column: ", SAMPLE_SHEET_PATH, call. = FALSE)
+    }
+
+    mapping <- stats::setNames(sheet$group, sheet$sample)
+    missing_samples <- setdiff(unique(samples), names(mapping))
+    if (length(missing_samples) > 0) {
+      stop(
+        "Sample group CSV is missing samples: ",
+        paste(missing_samples, collapse = ", "),
+        ". Rerun qc2 to refresh ",
+        SAMPLE_SHEET_PATH,
+        ".",
+        call. = FALSE
+      )
+    }
+
+    sheet_group_levels <- unique(sheet$group[has_text(sheet$group)])
+    group_levels <- if (exists("GROUP_LEVELS")) {
+      c(GROUP_LEVELS, setdiff(sheet_group_levels, GROUP_LEVELS))
+    } else {
+      sheet_group_levels
+    }
+    return(list(mapping = mapping, sample_levels = sheet$sample, group_levels = group_levels))
+  }
+
+  sample_levels <- unique(samples)
+  mapping <- stats::setNames(sample_levels, sample_levels)
+  group_levels <- if (exists("GROUP_LEVELS")) {
+    c(GROUP_LEVELS, setdiff(sample_levels, GROUP_LEVELS))
+  } else {
+    sample_levels
+  }
+  list(mapping = mapping, sample_levels = sample_levels, group_levels = group_levels)
+}
+
+assign_group_metadata <- function(sc, required_sheet = FALSE) {
+  sc$samples <- as.character(sc$orig.ident)
+  group_info <- resolve_group_mapping(sc$samples, required_sheet = required_sheet)
+  sc$group <- unname(group_info$mapping[sc$samples])
+  if (anyNA(sc$group)) warning("Some samples do not have group values.")
+  if (!is.null(group_info$sample_levels) && length(group_info$sample_levels) > 0) {
+    sc$samples <- factor(sc$samples, levels = group_info$sample_levels)
+  }
+  if (!is.null(group_info$group_levels) && length(group_info$group_levels) > 0) {
+    sc$group <- factor(sc$group, levels = group_info$group_levels)
   }
   sc
 }
 
-run_normalize_scale <- function(sc) {
-  if (identical(NORMALIZE$method, "SCT")) {
-    if (!NORMALIZE$source_assay %in% Assays(sc)) {
-      stop("SCT requires source assay: ", NORMALIZE$source_assay, call. = FALSE)
+seurat_assay_names <- function(obj) {
+  names(obj@assays)
+}
+
+run_sctransform <- function(obj, settings, context_label) {
+  if (!settings$source_assay %in% seurat_assay_names(obj)) {
+    stop(context_label, " SCT requires source assay: ", settings$source_assay, call. = FALSE)
+  }
+
+  DefaultAssay(obj) <- settings$source_assay
+  regress_vars <- intersect(settings$regress_vars, colnames(obj@meta.data))
+  has_sct_method <- nzchar(settings$sct_method)
+
+  if (has_sct_method &&
+      identical(settings$sct_method, "glmGamPoi") &&
+      !requireNamespace("glmGamPoi", quietly = TRUE)) {
+    stop(context_label, " SCT method glmGamPoi requires the glmGamPoi package.", call. = FALSE)
+  }
+
+  sct_label <- paste0(
+    context_label,
+    " SCTransform source_assay=",
+    settings$source_assay,
+    " assay=",
+    settings$assay,
+    " nfeatures=",
+    settings$nfeatures,
+    " regress=",
+    format_list_value(regress_vars),
+    " flavor=",
+    settings$sct_vst_flavor,
+    " method=",
+    ifelse(has_sct_method, settings$sct_method, "<default>")
+  )
+
+  run_call <- function(vst_flavor = settings$sct_vst_flavor, conserve_memory = settings$sct_conserve_memory) {
+    if (length(regress_vars) > 0 && has_sct_method) {
+      return(SCTransform(
+        object = obj,
+        assay = settings$source_assay,
+        new.assay.name = settings$assay,
+        variable.features.n = settings$nfeatures,
+        vst.flavor = vst_flavor,
+        return.only.var.genes = settings$sct_return_only_var_genes,
+        conserve.memory = conserve_memory,
+        vars.to.regress = regress_vars,
+        method = settings$sct_method,
+        verbose = settings$verbose
+      ))
     }
 
-    DefaultAssay(sc) <- NORMALIZE$source_assay
-    regress_vars <- intersect(NORMALIZE$regress_vars, colnames(sc@meta.data))
-    has_regress <- length(regress_vars) > 0
-    has_sct_method <- nzchar(NORMALIZE$sct_method)
+    if (length(regress_vars) > 0) {
+      return(SCTransform(
+        object = obj,
+        assay = settings$source_assay,
+        new.assay.name = settings$assay,
+        variable.features.n = settings$nfeatures,
+        vst.flavor = vst_flavor,
+        return.only.var.genes = settings$sct_return_only_var_genes,
+        conserve.memory = conserve_memory,
+        vars.to.regress = regress_vars,
+        verbose = settings$verbose
+      ))
+    }
 
     if (has_sct_method) {
-      if (identical(NORMALIZE$sct_method, "glmGamPoi") &&
-          !requireNamespace("glmGamPoi", quietly = TRUE)) {
-        stop("PIPELINE_SCT_METHOD=glmGamPoi requires the glmGamPoi package.", call. = FALSE)
-      }
+      return(SCTransform(
+        object = obj,
+        assay = settings$source_assay,
+        new.assay.name = settings$assay,
+        variable.features.n = settings$nfeatures,
+        vst.flavor = vst_flavor,
+        return.only.var.genes = settings$sct_return_only_var_genes,
+        conserve.memory = conserve_memory,
+        method = settings$sct_method,
+        verbose = settings$verbose
+      ))
     }
 
-    sct_label <- paste0(
-      "SCTransform source_assay=",
-      NORMALIZE$source_assay,
-      " assay=",
-      NORMALIZE$assay,
-      " nfeatures=",
-      NORMALIZE$nfeatures,
-      " regress=",
-      format_list_value(regress_vars),
-      " method=",
-      ifelse(has_sct_method, NORMALIZE$sct_method, "<default>")
+    SCTransform(
+      object = obj,
+      assay = settings$source_assay,
+      new.assay.name = settings$assay,
+      variable.features.n = settings$nfeatures,
+      vst.flavor = vst_flavor,
+      return.only.var.genes = settings$sct_return_only_var_genes,
+      conserve.memory = conserve_memory,
+      verbose = settings$verbose
     )
+  }
 
-    if (has_regress && has_sct_method) {
-      sc <- run_step(
-        sct_label,
-        SCTransform(
-          object = sc,
-          assay = NORMALIZE$source_assay,
-          new.assay.name = NORMALIZE$assay,
-          variable.features.n = NORMALIZE$nfeatures,
-          vst.flavor = NORMALIZE$sct_vst_flavor,
-          return.only.var.genes = NORMALIZE$sct_return_only_var_genes,
-          conserve.memory = NORMALIZE$sct_conserve_memory,
-          vars.to.regress = regress_vars,
-          method = NORMALIZE$sct_method,
-          verbose = NORMALIZE$verbose
-        )
-      )
-    } else if (has_regress) {
-      sc <- run_step(
-        sct_label,
-        SCTransform(
-          object = sc,
-          assay = NORMALIZE$source_assay,
-          new.assay.name = NORMALIZE$assay,
-          variable.features.n = NORMALIZE$nfeatures,
-          vst.flavor = NORMALIZE$sct_vst_flavor,
-          return.only.var.genes = NORMALIZE$sct_return_only_var_genes,
-          conserve.memory = NORMALIZE$sct_conserve_memory,
-          vars.to.regress = regress_vars,
-          verbose = NORMALIZE$verbose
-        )
-      )
-    } else if (has_sct_method) {
-      sc <- run_step(
-        sct_label,
-        SCTransform(
-          object = sc,
-          assay = NORMALIZE$source_assay,
-          new.assay.name = NORMALIZE$assay,
-          variable.features.n = NORMALIZE$nfeatures,
-          vst.flavor = NORMALIZE$sct_vst_flavor,
-          return.only.var.genes = NORMALIZE$sct_return_only_var_genes,
-          conserve.memory = NORMALIZE$sct_conserve_memory,
-          method = NORMALIZE$sct_method,
-          verbose = NORMALIZE$verbose
-        )
-      )
-    } else {
-      sc <- run_step(
-        sct_label,
-        SCTransform(
-          object = sc,
-          assay = NORMALIZE$source_assay,
-          new.assay.name = NORMALIZE$assay,
-          variable.features.n = NORMALIZE$nfeatures,
-          vst.flavor = NORMALIZE$sct_vst_flavor,
-          return.only.var.genes = NORMALIZE$sct_return_only_var_genes,
-          conserve.memory = NORMALIZE$sct_conserve_memory,
-          verbose = NORMALIZE$verbose
-        )
-      )
-    }
-    DefaultAssay(sc) <- NORMALIZE$assay
-    return(sc)
+  obj <- run_step(sct_label, run_call())
+  DefaultAssay(obj) <- settings$assay
+  obj
+}
+
+run_normalize_scale <- function(sc) {
+  if (identical(NORMALIZE$method, "SCT")) {
+    return(run_sctransform(sc, NORMALIZE, "Global"))
   }
 
   if (!identical(NORMALIZE$method, "NormalizeData")) {
@@ -676,15 +962,41 @@ prepare_subcluster_input <- function(sc) {
     sc$samples <- as.character(sc[[SUBCLUSTER$sample_col, drop = TRUE]])
   }
 
-  if (SUBCLUSTER$group_col %in% colnames(sc@meta.data)) {
-    sc$group <- as.character(sc[[SUBCLUSTER$group_col, drop = TRUE]])
-  } else if ("group" %in% colnames(sc@meta.data)) {
-    sc$group <- as.character(sc$group)
-  } else {
-    sc <- assign_group_metadata(sc)
+  group_info <- resolve_group_mapping(sc$samples, required_sheet = TRUE)
+  sc$group <- unname(group_info$mapping[sc$samples])
+  if (!is.null(group_info$sample_levels) && length(group_info$sample_levels) > 0) {
+    sc$samples <- factor(sc$samples, levels = group_info$sample_levels)
+  }
+  if (!is.null(group_info$group_levels) && length(group_info$group_levels) > 0) {
+    sc$group <- factor(sc$group, levels = group_info$group_levels)
+  }
+
+  if (anyNA(sc$group)) {
+    stop("Some subcluster samples do not have group values in ", SAMPLE_SHEET_PATH, call. = FALSE)
   }
 
   sc
+}
+
+empty_annotation_mapping <- function() {
+  character(0)
+}
+
+annotation_mapping_from_template <- function(template_path, cluster_col, label_col) {
+  mapping <- resolve_annotation_mapping(empty_annotation_mapping(), template_path, cluster_col, label_col)
+  mapping
+}
+
+ensure_annotation_mapping <- function(obj, cluster_values, template_path, output_template_fn, cluster_col, label_col) {
+  apply_annotation(
+    obj = obj,
+    cluster_values = cluster_values,
+    config_mapping = empty_annotation_mapping(),
+    template_path = template_path,
+    output_template_fn = output_template_fn,
+    cluster_col = cluster_col,
+    label_col = label_col
+  )
 }
 
 subset_subcluster_target <- function(sc) {
@@ -703,98 +1015,7 @@ subset_subcluster_target <- function(sc) {
 
 run_subcluster_normalize_scale <- function(obj) {
   if (identical(SUBCLUSTER$method, "SCT")) {
-    if (!SUBCLUSTER$source_assay %in% Assays(obj)) {
-      stop("Subcluster SCT requires source assay: ", SUBCLUSTER$source_assay, call. = FALSE)
-    }
-
-    DefaultAssay(obj) <- SUBCLUSTER$source_assay
-    regress_vars <- intersect(SUBCLUSTER$regress_vars, colnames(obj@meta.data))
-    has_regress <- length(regress_vars) > 0
-    has_sct_method <- nzchar(SUBCLUSTER$sct_method)
-
-    if (has_sct_method) {
-      if (identical(SUBCLUSTER$sct_method, "glmGamPoi") &&
-          !requireNamespace("glmGamPoi", quietly = TRUE)) {
-        stop("SUBCLUSTER_SCT_METHOD=glmGamPoi requires the glmGamPoi package.", call. = FALSE)
-      }
-    }
-
-    sct_label <- paste0(
-      "Subcluster SCTransform source_assay=",
-      SUBCLUSTER$source_assay,
-      " assay=",
-      SUBCLUSTER$assay,
-      " nfeatures=",
-      SUBCLUSTER$nfeatures,
-      " regress=",
-      format_list_value(regress_vars),
-      " method=",
-      ifelse(has_sct_method, SUBCLUSTER$sct_method, "<default>")
-    )
-
-    if (has_regress && has_sct_method) {
-      obj <- run_step(
-        sct_label,
-        SCTransform(
-          object = obj,
-          assay = SUBCLUSTER$source_assay,
-          new.assay.name = SUBCLUSTER$assay,
-          variable.features.n = SUBCLUSTER$nfeatures,
-          vst.flavor = SUBCLUSTER$sct_vst_flavor,
-          return.only.var.genes = SUBCLUSTER$sct_return_only_var_genes,
-          conserve.memory = SUBCLUSTER$sct_conserve_memory,
-          vars.to.regress = regress_vars,
-          method = SUBCLUSTER$sct_method,
-          verbose = TRUE
-        )
-      )
-    } else if (has_regress) {
-      obj <- run_step(
-        sct_label,
-        SCTransform(
-          object = obj,
-          assay = SUBCLUSTER$source_assay,
-          new.assay.name = SUBCLUSTER$assay,
-          variable.features.n = SUBCLUSTER$nfeatures,
-          vst.flavor = SUBCLUSTER$sct_vst_flavor,
-          return.only.var.genes = SUBCLUSTER$sct_return_only_var_genes,
-          conserve.memory = SUBCLUSTER$sct_conserve_memory,
-          vars.to.regress = regress_vars,
-          verbose = TRUE
-        )
-      )
-    } else if (has_sct_method) {
-      obj <- run_step(
-        sct_label,
-        SCTransform(
-          object = obj,
-          assay = SUBCLUSTER$source_assay,
-          new.assay.name = SUBCLUSTER$assay,
-          variable.features.n = SUBCLUSTER$nfeatures,
-          vst.flavor = SUBCLUSTER$sct_vst_flavor,
-          return.only.var.genes = SUBCLUSTER$sct_return_only_var_genes,
-          conserve.memory = SUBCLUSTER$sct_conserve_memory,
-          method = SUBCLUSTER$sct_method,
-          verbose = TRUE
-        )
-      )
-    } else {
-      obj <- run_step(
-        sct_label,
-        SCTransform(
-          object = obj,
-          assay = SUBCLUSTER$source_assay,
-          new.assay.name = SUBCLUSTER$assay,
-          variable.features.n = SUBCLUSTER$nfeatures,
-          vst.flavor = SUBCLUSTER$sct_vst_flavor,
-          return.only.var.genes = SUBCLUSTER$sct_return_only_var_genes,
-          conserve.memory = SUBCLUSTER$sct_conserve_memory,
-          verbose = TRUE
-        )
-      )
-    }
-    DefaultAssay(obj) <- SUBCLUSTER$assay
-    return(obj)
+    return(run_sctransform(obj, SUBCLUSTER, "Subcluster"))
   }
 
   if (!identical(SUBCLUSTER$method, "NormalizeData")) {
@@ -921,7 +1142,17 @@ prepare_marker_assay <- function(obj, assay) {
     assay_obj <- obj[[assay]]
   }
 
-  obj <- JoinLayers(obj, assay = assay)
+  if (inherits(assay_obj, "SCTAssay")) {
+    return(obj)
+  }
+
+  obj <- tryCatch(
+    JoinLayers(obj, assay = assay),
+    error = function(e) {
+      warning("JoinLayers skipped for assay ", assay, ": ", conditionMessage(e))
+      obj
+    }
+  )
   obj
 }
 
@@ -974,6 +1205,17 @@ write_annotation_template <- function(
   label_values <- unname(label_values[cluster_ids])
   label_values[is.na(label_values)] <- ""
 
+  if (file.exists(path)) {
+    existing <- read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+    if (all(c(cluster_col, label_col) %in% colnames(existing))) {
+      existing_ids <- as.character(existing[[cluster_col]])
+      existing_labels <- trimws(as.character(existing[[label_col]]))
+      existing_map <- stats::setNames(existing_labels, existing_ids)
+      reusable <- cluster_ids %in% names(existing_map) & has_text(existing_map[cluster_ids])
+      label_values[reusable] <- unname(existing_map[cluster_ids[reusable]])
+    }
+  }
+
   marker_summary <- top_marker_summary(markers, top_n = top_n)
   top_markers <- unname(marker_summary[cluster_ids])
   top_markers[is.na(top_markers)] <- ""
@@ -996,7 +1238,7 @@ write_cluster_annotation_template <- function(sc, markers = NULL) {
   cluster_ids <- sort_cluster_ids(sc$seurat_clusters)
   write_annotation_template(
     cluster_ids = cluster_ids,
-    label_values = CLUSTER_TO_CELLTYPE,
+    label_values = empty_annotation_mapping(),
     path = ANNOTATION$template_path,
     cluster_col = "cluster",
     label_col = "cell_type",
@@ -1007,24 +1249,15 @@ write_cluster_annotation_template <- function(sc, markers = NULL) {
 
 write_subcluster_annotation_template <- function(obj, markers = NULL) {
   cluster_ids <- sort_cluster_ids(obj$cluster_id)
-  write.csv(
-    data.frame(cluster_id = cluster_ids, sub_cell_type = "", stringsAsFactors = FALSE),
-    SUBCLUSTER$template_path,
-    row.names = FALSE,
-    quote = FALSE
+  write_annotation_template(
+    cluster_ids = cluster_ids,
+    label_values = empty_annotation_mapping(),
+    path = SUBCLUSTER$template_path,
+    cluster_col = "cluster_id",
+    label_col = "sub_cell_type",
+    markers = markers,
+    top_n = SUBCLUSTER$marker_params$top_n_for_template
   )
-  if (!is.null(markers) && nrow(markers) > 0) {
-    write_annotation_template(
-      cluster_ids = cluster_ids,
-      label_values = SUBCLUSTER$annotation,
-      path = SUBCLUSTER$template_path,
-      cluster_col = "cluster_id",
-      label_col = "sub_cell_type",
-      markers = markers,
-      top_n = SUBCLUSTER$marker_params$top_n_for_template
-    )
-  }
-  SUBCLUSTER$template_path
 }
 
 read_template_mapping <- function(path, cluster_col, label_col) {
@@ -1073,7 +1306,7 @@ apply_annotation <- function(
       label_col,
       " missing clusters: ",
       paste(missing_clusters, collapse = ", "),
-      ". Fill template or 00_config.R, then rerun. Template: ",
+      ". Fill the annotation template, then rerun. Template: ",
       template,
       call. = FALSE
     )
@@ -1331,33 +1564,35 @@ step_qc1 <- function() {
   sc <- assign_group_metadata(sc)
 
   save_qc_plots(sc, "before")
+  write_qc_filter_sheet(sc)
   save_qs2(sc, QS2_PRE_QC)
 
-  log_msg("Step 01 QC before filtering done. Edit QC_FILTER in 00_config.R, then run main/01_qc2.R.")
+  log_msg("Step 01 QC before filtering done. Edit ", QC_FILTER_SHEET_PATH, ", then run main/01_qc2.R.")
 }
 
 step_qc2 <- function() {
   log_msg("Step 01 QC filtering started")
 
   sc <- read_qs2(QS2_PRE_QC)
-  sc <- run_step("Apply QC_FILTER", apply_qc_filter(sc))
+  sc <- run_step("Apply sample QC thresholds", apply_qc_filter(sc))
   sc <- assign_group_metadata(sc)
 
   if (ncol(sc) == 0) {
-    stop("No cells left after QC_FILTER. Relax parameters in 00_config.R.", call. = FALSE)
+    stop("No cells left after sample QC thresholds. Relax parameters in ", QC_FILTER_SHEET_PATH, ".", call. = FALSE)
   }
 
+  write_sample_group_sheet(sc)
   save_qc_plots(sc, "after")
   save_qs2(sc, QS2_QC)
 
-  log_msg("Step 01 QC filtering done. Kept cells: ", ncol(sc))
+  log_msg("Step 01 QC filtering done. Kept cells: ", ncol(sc), ". Sample groups: ", SAMPLE_SHEET_PATH)
 }
 
 step_globalcluster <- function() {
   log_msg("Step 02 global clustering started")
 
   sc <- read_qs2(QS2_QC)
-  sc <- assign_group_metadata(sc)
+  sc <- assign_group_metadata(sc, required_sheet = TRUE)
   sc <- run_normalize_scale(sc)
   sc <- run_global_clustering(sc)
 
@@ -1392,19 +1627,16 @@ step_cell_annotation <- function() {
   log_msg("Step 04 cell annotation started")
 
   sc <- read_qs2(QS2_CLUSTER)
-  sc <- assign_group_metadata(sc)
-  clusters <- sort_cluster_ids(sc$seurat_clusters)
-  mapping_used <- resolve_annotation_mapping(
-    CLUSTER_TO_CELLTYPE,
+  sc <- assign_group_metadata(sc, required_sheet = TRUE)
+  mapping_used <- annotation_mapping_from_template(
     ANNOTATION$template_path,
     "cluster",
     "cell_type"
   )
 
-  sc <- apply_annotation(
+  sc <- ensure_annotation_mapping(
     obj = sc,
     cluster_values = as.character(sc$seurat_clusters),
-    config_mapping = CLUSTER_TO_CELLTYPE,
     template_path = ANNOTATION$template_path,
     output_template_fn = function() write_cluster_annotation_template(sc),
     cluster_col = "cluster",
@@ -1431,7 +1663,7 @@ step_cell_proportion <- function() {
   log_msg("Step 05 cell proportion started")
 
   sc <- read_qs2(QS2_ANNOTATED)
-  sc <- assign_group_metadata(sc)
+  sc <- assign_group_metadata(sc, required_sheet = TRUE)
 
   if (!"cell_type" %in% colnames(sc@meta.data)) {
     stop("Missing cell_type. Run main/04_cell_annotation.R first.", call. = FALSE)
@@ -1499,17 +1731,15 @@ step_subcluster_annotation <- function() {
   obj <- prepare_subcluster_input(obj)
   Idents(obj) <- "seurat_clusters"
   obj$cluster_id <- as.character(Idents(obj))
-  mapping_used <- resolve_annotation_mapping(
-    SUBCLUSTER$annotation,
+  mapping_used <- annotation_mapping_from_template(
     SUBCLUSTER$template_path,
     "cluster_id",
     "sub_cell_type"
   )
 
-  obj <- apply_annotation(
+  obj <- ensure_annotation_mapping(
     obj = obj,
     cluster_values = obj$cluster_id,
-    config_mapping = SUBCLUSTER$annotation,
     template_path = SUBCLUSTER$template_path,
     output_template_fn = function() write_subcluster_annotation_template(obj),
     cluster_col = "cluster_id",
