@@ -1,0 +1,26 @@
+# -r 字符型 必填 输入的rds文件地址
+# -g 字符型 可选 使用基因列表文件地址，如果没传入的话会抽取rds中的的hvg
+# -l 数值型 必填 lamda数值，主要影响branch节点多少值越大节点越多
+# -o 字符型 必填 输出结果地址
+# -S 数值型 可选 选择起始点的state数值
+# -v 逻辑型 可选 输入TRUE/FALSE,是否翻转起点终点
+# -C 字符型 可选 选择部分细胞进行分析
+# -c 字符型 可选 选择Cluster进行分析 
+# -R 逻辑型 可选 输入TRUE/FALSE,是否进行随机抽取细胞
+# -P 数值型 可选 进行随机抽取的细胞比例
+# -M 数值型 可选 进行随机抽取的每个Cluster最小细胞数
+
+#拟时序代码
+Rscript /home/wzb/pipline/Pseudotime/pseudotime.R -r "/home/wzb/Pseudotime/Neutrophil/Neutrophil.rds"  -l 8  -o "/home/wzb/Pseudotime/Neutrophil/"
+Rscript pseudotime.R -r "/home/hf/project/shen/L_fibroblast.rds" -l 8 -S "L1" -o "/home/hf/project/shen/monocle2/Pseudotime/sub_fb"
+
+# -r 字符型 必填 输入的rds文件地址
+# -o 字符型 必填 输出结果地址
+# -g 字符型 可选 需要进行展示的基因列表
+# -b 数值型 必填 输入进行BEAM分析的branch点信息 
+# -n 数值型 可选 绘制热图需要聚类的数量，默认为3
+# -T 数值型 可选 绘制热图使用的基因数量，默认使用100
+# -q 数值型 可选 进行基因筛选时候q值卡值，默认使用0.0001
+
+#BEAM分析代码
+Rscript Pseudo_BEAM.R -r "/home/hf/project/monocle2/scRNA_fib_annotated.rds"  -b 1  -o "/home/hf/project/monocle2/Pseudotime/total_fb"

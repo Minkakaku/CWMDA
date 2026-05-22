@@ -1,0 +1,15 @@
+# z-score Normalization
+Z-score表示一个值是高于或低于平均值多少个标准差(a score that indicates how many standard deviations a value is above or below the mean).
+比如用于RNA-seq 的normalisation.对每个基因的原始表达量减去平均基因丰度,然后除以所有样本测量的标准差SD(standard deviation).这个与TPMs(Transcripts per million)：计数通过特征长度归一化。
+Z-score主要目的将不同量级的数据统一转化为同一量级,统一用计算出的Z-score衡量,保证数据之间的可比性。计算之前需要:
+
+1. 总体数据的均值（μ）
+2. 总体数据的标准差(σ)
+3. 个体的观测值(x)
+
+计算(x-μ)/σ，实现将不同的数据转换到相同的量级上，值没有量纲，实现标准化。z score告诉我们这个值距离平均值相差几个标准差。
+
+z-score = 1 意味着样本值超过均值 1 个标准差；
+z-score = 2 意味着样本值超过均值 2 个标准差；
+z-score = -1.8 意味着样本值低于均值 1.8 个标准差。
+z-score告诉我们样本值在正态分布曲线中所处的位置。z-score = 0告诉我们该样本正好位于均值处，z-score = 3 则告诉我们样本值远高于均值

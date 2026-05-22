@@ -1,0 +1,10 @@
+genome:
+  sample_id: example_genome
+  input_bam: data/genome/raw/sample.bam
+  reference_fasta: data/genome/reference/genome.fa
+  output_dir: data/genome/output
+qc:
+  tool: fastp
+variant_calling:
+  caller: bcftools
+  output_vcf: data/genome/output/variants.vcf

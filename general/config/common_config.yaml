@@ -1,0 +1,12 @@
+project:
+  name: multi-omics
+  output_root: output
+logging:
+  level: INFO
+  log_dir: logs
+qc:
+  report_name: qc_report
+  tsv_name: qc_stats.tsv
+  html_name: qc_report.html
+paths:
+  temp_dir: temp

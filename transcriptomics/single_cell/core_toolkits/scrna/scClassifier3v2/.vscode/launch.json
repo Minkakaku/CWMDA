@@ -1,0 +1,28 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Python: 当前文件",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "--sup-data-file", "/media/zengbio/BKDATA/DATA2/Project/ssDGM_evaluation/sepsis/human_sepsis_dataset.mtx",
+                "--sup-label-file", "/media/zengbio/BKDATA/DATA2/Project/ssDGM_evaluation/sepsis/human_sepsis_dataset_subcluster.txt",
+                "-lr", "0.0002",
+                "-n", "10",
+                "-bs", "1000",
+                "--aux-loss",
+                "--validation-fold", "10",
+                "--cuda",
+                "-rt",
+                "--save-model", "model.pth"
+            ]
+        }
+    ]
+}

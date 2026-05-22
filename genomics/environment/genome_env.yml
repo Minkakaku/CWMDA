@@ -1,0 +1,11 @@
+name: bio-genome
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - bcftools
+  - samtools
+  - pysam
+  - fastp
+  - pyyaml

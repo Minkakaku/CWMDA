@@ -1,0 +1,12 @@
+/data/outputdata/outputdata-sc/cellranger_out            cellranger输出的地址
+/data/outputdata/outputdata-sc/scVision_output          8501的输出地址
+/data/rawdata/rawdata-sc                                      原始数据地址
+http://172.30.10.203:8501/                           单细胞标准分析
+http://cloud.cwmda.com:30008/lims    云启平台
+/home/ztt/scRNA/cellranger_out       cellranger临时输出地址
+
+服务器地址
+172.10.30.31
+172.10.30.203
+172.10.30.204
+172.10.30.205
